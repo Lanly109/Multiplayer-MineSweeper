@@ -8,8 +8,4 @@ DEFAULT_PART_MINE_NUM = 48
 
 
 '''数据库配置'''
-HOST = '127.0.0.1'
-USER = 'cm'
-PASSWORD = 'clearmind'
-DATABASE = 'clearmind'
-
+DATABASE = 'clearmind.db'

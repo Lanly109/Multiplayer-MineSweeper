@@ -1,224 +1,186 @@
+import os
 from random import randint
-import pymysql
-#from soupsieve import select
-from .config import HOST, USER, PASSWORD, DATABASE
-from typing import Dict, Optional, List
+import sqlite3
+import threading
+from .config import DATABASE
+from typing import Dict, Optional, List, Any
+
+thread_local = threading.local()
+
 class sqlOperator:
-    def __init__(self, host = HOST, user = USER, password = PASSWORD, database = DATABASE):
-        self.__host = host
-        self.__user = user
-        self.__password = password
+    def __init__(self, database=DATABASE):
         self.__database = database
+        if not os.path.exists(self.__database):
+            self.__initialize_database()
     
-    # 激活对象
+    def __initialize_database(self):
+        """首次创建数据库时执行建表语句"""
+        try:
+            self.active()
+            self.__cursor.executescript('''
+                CREATE TABLE invitation(
+                    userID TEXT PRIMARY KEY,
+                    invitationCode TEXT UNIQUE,
+                    ifUsed INTEGER DEFAULT 0
+                );
+                
+                CREATE TABLE userInfo(
+                    userID TEXT PRIMARY KEY,
+                    username TEXT UNIQUE,
+                    passwd TEXT,
+                    ifOnline INTEGER DEFAULT 0,
+                    clearCount INTEGER DEFAULT 0,
+                    boomCount INTEGER DEFAULT 0
+                );
+            ''')
+            self.__connection.commit()
+        finally:
+            self.inactive()
+    
     def active(self):
-        self.__connection = pymysql.connect(host = self.__host, user = self.__user, password = self.__password, database = self.__database)
-        self.__cursor = self.__connection.cursor(cursor=pymysql.cursors.DictCursor)
+        # Create connection per thread
+        if not hasattr(thread_local, "connection"):
+            thread_local.connection = sqlite3.connect(self.__database, check_same_thread=False)
+            thread_local.connection.row_factory = sqlite3.Row
+            thread_local.cursor = thread_local.connection.cursor()
+            thread_local.cursor.execute('PRAGMA foreign_keys = ON')
+        self.__connection = thread_local.connection
+        self.__cursor = thread_local.cursor
 
-    # 关闭对象功能
     def inactive(self):
-        self.__connection.close()
-        self.__cursor.close()
+        # Don't close connection immediately, let thread-local handle it
+        pass
+    
 
-    # 查询邀请码对应的userID
     def select_invitation_userID(self, invitationCode) -> Optional[dict]:
-        self.__connection.ping(reconnect=True)
-        sql = 'select userID from invitation where invitationCode = \'%s\'' % (invitationCode)
-        self.__cursor.execute(sql)
+        sql = 'SELECT userID FROM invitation WHERE invitationCode = ?'
+        self.__cursor.execute(sql, (invitationCode,))
         ret = self.__cursor.fetchone()
-        return ret
+        return dict(ret) if ret else None
 
-    # 查询邀请码是否被使用过
-    # -1 表示邀请码错误 运行正常返回0或1
     def select_invitation_ifUsed(self, invitationCode) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'select ifUsed from invitation where invitationCode = \'%s\'' % (invitationCode)
-        self.__cursor.execute(sql)
+        sql = 'SELECT ifUsed FROM invitation WHERE invitationCode = ?'
+        self.__cursor.execute(sql, (invitationCode,))
         ret = self.__cursor.fetchone()
-        if ret == None:
-            return -1
-        else:
-            return ret['ifUsed']
+        return ret['ifUsed'] if ret else -1
 
-    # 更新邀请码使用记录
-    # -1表示邀请码错误  运行正常返回1
     def update_invitation_ifUsed(self, invitationCode, ifUsed) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'update invitation set ifUsed = %d where invitationCode = \'%s\'' % (ifUsed,invitationCode)
-        ret = self.__cursor.execute(sql)
+        sql = 'UPDATE invitation SET ifUsed = ? WHERE invitationCode = ?'
+        self.__cursor.execute(sql, (ifUsed, invitationCode))
         self.__connection.commit()
-        if ret == 0:
-            return -1
-        else:
-            return ret
-    
-    # 查询用户名和密码
+        return self.__cursor.rowcount
+
     def select_userInfo_uAp(self, userID) -> Optional[dict]:
-        self.__connection.ping(reconnect=True)
-        sql = 'select username,passwd from userInfo where userID = \'%s\'' % (userID)
-        self.__cursor.execute(sql)
+        sql = 'SELECT username,passwd FROM userInfo WHERE userID = ?'
+        self.__cursor.execute(sql, (userID,))
         ret = self.__cursor.fetchone()
-        return ret
+        return dict(ret) if ret else None
 
-    # 更新用户名和密码
-    # -2表示userID错误  运行正常返回1
     def update_userInfo_uAp(self, userID, dir) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'update userInfo set username = \'%s\' , passwd = \'%s\' where userID = \'%s\'' % (dir['username'],dir['passwd'],userID)
-        ret = self.__cursor.execute(sql)
+        sql = '''UPDATE userInfo 
+                SET username = ?, passwd = ? 
+                WHERE userID = ?'''
+        params = (dir['username'], dir['passwd'], userID)
+        self.__cursor.execute(sql, params)
         self.__connection.commit()
-        if ret == 0:
-            return -2
-        else:
-            return ret
+        return self.__cursor.rowcount
 
-    # 插入新用户
-    # -3表示插入新用户异常  运行正常返回1
-    def insert_serInfo_uAp(self,dir) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'insert into userInfo values (\'%s\', \'%s\', \'%s\', 0, 0, 0)' % (dir['userID'] , dir['username'] , dir['passwd'])
-        ret=self.__cursor.execute(sql)
-        self.__connection.commit() 
-        if ret == 0:
-            return -3
-        else:
-            return ret
+    def insert_serInfo_uAp(self, dir) -> int:
+        sql = '''INSERT INTO userInfo 
+                (userID, username, passwd, ifOnline, clearCount, boomCount) 
+                VALUES (?, ?, ?, 0, 0, 0)'''
+        params = (dir['userID'], dir['username'], dir['passwd'])
+        self.__cursor.execute(sql, params)
+        self.__connection.commit()
+        return self.__cursor.rowcount
 
-    # 查询用户是否在线
-    # -4表示username错误  运行正常返回0或1
     def select_userInfo_ifOnline(self, username) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'select ifOnline from userInfo where username = \'%s\'' % (username)
-        self.__cursor.execute(sql)
+        sql = 'SELECT ifOnline FROM userInfo WHERE username = ?'
+        self.__cursor.execute(sql, (username,))
         ret = self.__cursor.fetchone()
-        if ret == None:
-            return -4
-        return ret['ifOnline']
+        return ret['ifOnline'] if ret else -4
 
-    # 更改用户是否在线
-    # -4表示username错误  运行正常返回1
     def update_userInfo_ifOnline(self, username, ifOnline) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'update userInfo set ifOnline = %d where username= \'%s\'' % (ifOnline,username)
-        ret = self.__cursor.execute(sql)
+        sql = 'UPDATE userInfo SET ifOnline = ? WHERE username = ?'
+        self.__cursor.execute(sql, (ifOnline, username))
         self.__connection.commit()
-        if ret == 0:
-            return -4
-        else:
-            return ret
-    
-    # 查询用户扫出的区域个数
-    # -4表示username错误 
+        return self.__cursor.rowcount
+
     def select_userInfo_clearCount(self, username) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'select clearCount from userInfo where username = \'%s\'' % (username)
-        self.__cursor.execute(sql)
+        sql = 'SELECT clearCount FROM userInfo WHERE username = ?'
+        self.__cursor.execute(sql, (username,))
         ret = self.__cursor.fetchone()
-        if ret == None:
-            return -4
-        else:
-            return ret['clearCount']
-    
-    # 更新用户扫出的区域个数
-    # -4表示username错误  运行正常返回1
+        return ret['clearCount'] if ret else -4
+
     def update_userInfo_clearCount(self, username, clearCount) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'update userInfo set clearCount = %d where username= \'%s\'' % (clearCount,username)
-        ret = self.__cursor.execute(sql)
+        sql = 'UPDATE userInfo SET clearCount = ? WHERE username = ?'
+        self.__cursor.execute(sql, (clearCount, username))
         self.__connection.commit()
-        if ret == 0:
-            return -4
-        else:
-            return ret
+        return self.__cursor.rowcount
 
-    # 查询用户炸雷个数
-    # -4表示username错误 
     def select_userInfo_boomCount(self, username) -> int:
-        self.__connection.ping(reconnect=True)
-        sql = 'select boomCount from userInfo where username = \'%s\'' % (username)
-        self.__cursor.execute(sql)
+        sql = 'SELECT boomCount FROM userInfo WHERE username = ?'
+        self.__cursor.execute(sql, (username,))
         ret = self.__cursor.fetchone()
-        if ret == None:
-            return -4
-        else:
-            return ret['boomCount']
+        return ret['boomCount'] if ret else -4
 
-    # 更新用户炸雷个数
-    # -4表示username错误 
     def update_userInfo_boomCount(self, username, boomCount):
-        self.__connection.ping(reconnect=True)
-        sql = 'update userInfo set boomCount = %d where username= \'%s\'' % (boomCount,username)
-        ret = self.__cursor.execute(sql)
+        sql = 'UPDATE userInfo SET boomCount = ? WHERE username = ?'
+        self.__cursor.execute(sql, (boomCount, username))
         self.__connection.commit()
-        if ret == 0:
-            return -4
-        else:
-            return ret
+        return self.__cursor.rowcount
 
     def add_invite_code(self, number: int) -> None:
-        '''批量增加邀请码'''
-        self.__connection.ping(reconnect=True)
-        sql = 'select userID uid, invitationCode code from invitation'
-        row = self.__cursor.execute(sql)
-        datas = self.__cursor.fetchall()
-        spanl, spanr = 10000, 99999
+        sql = 'SELECT MAX(rowid) FROM invitation'
+        self.__cursor.execute(sql)
+        max_id = self.__cursor.fetchone()[0] or 0
+
         for _ in range(number):
-            row += 1
-            code = str(row)
-            if len(code) < 5: code = '0' * (5 - len(code)) + code
-            for __ in range(5):
-                code += '-' + str(randint(spanl, spanr))
-            sql = 'insert into invitation values (%s, %s, 0);'
-            self.__cursor.execute(sql, (row, code))
+            max_id += 1
+            code = f"{max_id:05d}-{randint(10000,99999)}"
+            sql = 'INSERT INTO invitation VALUES (?, ?, 0)'
+            self.__cursor.execute(sql, (max_id, code))
         self.__connection.commit()
 
-    def get_invite_code(self) -> None:
-        self.__connection.ping(reconnect=True)
-        sql = 'select invitationCode code from invitation where ifUsed = 0 order by code'
+    def get_invite_code(self) -> list:
+        sql = 'SELECT invitationCode AS code FROM invitation WHERE ifUsed = 0'
         self.__cursor.execute(sql)
-        return self.__cursor.fetchall()
+        return [dict(row) for row in self.__cursor.fetchall()]
 
-    def select_by_user(self, username : str) -> Optional[dict]:
-        '''根据用户名查询匹配者的所有信息'''
-        self.__connection.ping(reconnect=True)
-        sql = f'select * from userInfo where username = \'{username}\''
-        self.__cursor.execute(sql)
-        return self.__cursor.fetchone()
+    def select_by_user(self, username: str) -> Optional[dict]:
+        sql = 'SELECT * FROM userInfo WHERE username = ?'
+        self.__cursor.execute(sql, (username,))
+        ret = self.__cursor.fetchone()
+        return dict(ret) if ret else None
 
-    def register(self, invitecode : str, username : str, password : str) -> bool:
-        '''用户注册'''
+    def register(self, invitecode: str, username: str, password: str) -> bool:
+        if self.select_by_user(username):
+            return False
 
-        self.__connection.ping(reconnect=True)
-
-        # 检查重名
-        if self.select_by_user(username) != None: return False
-
-        # 检查邀请码合法性(存在/未使用)
-        sql = f'select userID, ifUsed from invitation where invitationCode = \'{invitecode}\''
-        row = self.__cursor.execute(sql)
-        if row == 0: return False
+        sql = '''SELECT userID, ifUsed FROM invitation 
+                WHERE invitationCode = ?'''
+        self.__cursor.execute(sql, (invitecode,))
         data = self.__cursor.fetchone()
-        if data['ifUsed'] != 0: return False
+        
+        if not data or data['ifUsed'] != 0:
+            return False
 
-        # 注册操作
-        sql = 'insert into userInfo values (%s, %s, %s, 0, 0, 0)'
-        self.__cursor.execute(sql, (data['userID'], username, password))
-        self.__connection.commit()
-        self.update_invitation_ifUsed(invitecode, 1)
-        return True
+        try:
+            sql = '''INSERT INTO userInfo 
+                    (userID, username, passwd, ifOnline, clearCount, boomCount) 
+                    VALUES (?, ?, ?, 0, 0, 0)'''
+            self.__cursor.execute(sql, (data['userID'], username, password))
+            self.update_invitation_ifUsed(invitecode, 1)
+            return True
+        except sqlite3.IntegrityError:
+            return False
 
-    def get_totalRank_data(self) -> Optional[List[dict]]:
-        '''查询总榜(所有用户)信息'''
-
-        self.__connection.ping(reconnect=True)
-        sql = 'select username, clearCount, boomCount from userInfo'
+    def get_totalRank_data(self) -> List[dict]:
+        sql = 'SELECT username, clearCount, boomCount FROM userInfo'
         self.__cursor.execute(sql)
-        return self.__cursor.fetchall()
+        return [dict(row) for row in self.__cursor.fetchall()]
 
-    def test_select(self):
-        '''测试使用, 无实际用途'''
-
-        self.__connection.ping(reconnect=True)
-        sql = 'select userID uid, invitationCode code from invitation'
-        row = self.__cursor.execute(sql)
-        return self.__cursor.fetchall()
+    def test_select(self) -> list:
+        sql = 'SELECT userID AS uid, invitationCode AS code FROM invitation'
+        self.__cursor.execute(sql)
+        return [dict(row) for row in self.__cursor.fetchall()]
