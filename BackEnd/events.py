@@ -128,6 +128,9 @@ def mine_connect():
         emit('history', json.dumps(CM_server.history()))
         print_and_log('emit history 完成')
 
+        emit('all_flags', json.dumps(CM_server.get_all_flags()))
+        print_and_log('emit all_flags 完成')
+
     except Exception as e:
         print_and_log('>>> error ' +  str(type(e)) + ' ' + str(e))
         disconnect()
@@ -233,6 +236,37 @@ def getrank(info):
 
     emit('rank_rev', json.dumps(CM_server.rank()))
     print_and_log('rank_rev 本局榜发送完成')
+
+@clearmind_socketio.on('flag', namespace='/wsmine')
+def handle_flag(info):
+    '''同步旗子/问号标记到所有客户端'''
+    print_and_log('收到 flag 标记同步请求...')
+    try:
+        cookie = request.args['cookie']
+        username, tm = cookie_user_dict[cookie]
+        # 判断身份是否过期
+        if time.time() - tm > DISCONNECT_TIME:
+            emit('error', 'gone too long')
+            disconnect()
+            return False
+        # 更新最近活跃时间
+        cookie_user_dict[cookie] = (username, time.time())
+
+        # 解析前端发来的标记信息
+        data = json.loads(info)
+        x = data['x']
+        y = data['y']
+        flag = data['flag']
+        # 存储flag到后端
+        CM_server.set_flag(x, y, flag)
+
+        # 直接广播标记变更
+        emit('flag_broadcast', info, broadcast=True)
+        print_and_log(f'flag 广播完成: {info}')
+    except Exception as e:
+        print_and_log('>>> error ' +  str(type(e)) + ' ' + str(e))
+        disconnect()
+        return False
 
 @clearmind_socketio.on('connect', namespace='/wsrank')
 def rank_connect():

@@ -91,3 +91,16 @@ class Server:
     def total_rank(self) -> List[dict]:
         '''查询历史积累战绩'''
         return self.__SQL.get_totalRank_data()
+
+    def set_flag(self, x: int, y: int, flag: int) -> None:
+        '''设置某个格子的flag状态'''
+        self.__CM.set_flag(x, y, flag)
+        # 如需持久化到数据库，可在这里调用数据库操作
+
+    def get_flag(self, x: int, y: int) -> int:
+        '''获取某个格子的flag状态'''
+        return self.__CM.get_flag(x, y)
+
+    def get_all_flags(self) -> List[Tuple[int, int, int]]:
+        '''获取所有有标记的格子的flag状态'''
+        return self.__CM.get_all_flags()

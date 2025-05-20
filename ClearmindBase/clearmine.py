@@ -77,6 +77,7 @@ class ClearMine:
 
         # 生成雷区地图
         self.__distribute()
+        self.__flags = np.zeros([self.__size_row, self.__size_col], dtype=np.int8)
 
         # 已经扫开的非雷格子数量
         self.__safe = 0 
@@ -218,6 +219,26 @@ class ClearMine:
         self.__rank[username]['score'] += self.__score_counter
 
         return self.__score_counter
+
+    def set_flag(self, x: int, y: int, flag: int) -> None:
+        '''设置某个格子的flag状态'''
+        if self.__judgeEdge(x, y):
+            self.__flags[x][y] = flag
+
+    def get_flag(self, x: int, y: int) -> int:
+        '''获取某个格子的flag状态'''
+        if self.__judgeEdge(x, y):
+            return int(self.__flags[x][y])
+        return 0
+
+    def get_all_flags(self) -> List[Tuple[int, int, int]]:
+        '''获取所有格子的flag状态，返回(x, y, flag)列表'''
+        result = []
+        for i in range(self.__size_row):
+            for j in range(self.__size_col):
+                if self.__flags[i][j] != 0:
+                    result.append((i, j, int(self.__flags[i][j])))
+        return result
 
     def give_color(self, username : str) -> None:
         '''给新用户随机分配一个颜色'''
